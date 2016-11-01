@@ -276,7 +276,7 @@ class MultivariateEmulator ( object ):
             fwd += pred_mu * self.basis_functions[i]
             if do_deriv:
                 deriv += np.matrix(grad).T * np.matrix(self.basis_functions[i])               
-        elif do_deriv:
+        if do_deriv:
             return fwd.squeeze(), deriv
         else:
             return fwd.squeeze()
