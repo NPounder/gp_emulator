@@ -29,6 +29,7 @@ to be the saved filename, and the emulator will be recreated.
 import os
 import shutil
 
+import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -37,7 +38,10 @@ from GaussianProcess import GaussianProcess
 
 class MultivariateEmulator ( object ):
 
-    def __init__ ( self, dump=None, X=None, y=None, hyperparams=None, thresh=0.98, n_tries=5 ):
+    def __init__ ( self, dump=None, X=None, y=None, 
+                  hyperparams=None, 
+                  model="", sza=0, vza=0, raa=0,
+                  thresh=0.98, n_tries=5 ):
         """Constructor
         
         The constructor takes an array of model outputs `X`, and a vector
@@ -67,29 +71,38 @@ class MultivariateEmulator ( object ):
         """
         if dump is not None:
             if X is None and y is None:
-                f = np.load ( dump )
-                X = f[ 'X' ]
-                y = f[ 'y' ]
-                hyperparams = f[ 'hyperparams' ]
-                thres = f[ 'thresh' ]
-                try:
-#                if f.has_key ( "basis_functions" ):
-                    basis_functions = f[ 'basis_functions' ]
-                    n_pcs = f[ 'n_pcs' ]
+		if dump.find (".h5") > 0 or dump.find(".hdf5") > 0:
+	            f = h5py.File ( dump, 'r+')
+ 	            group = "%s_%03d_%03d_%03d" % ( model, sza, vza, raa )
+        	    X = f[group + '/X_train'][:,:]
+                    y = f[group + '/y_train'][:,:]
+                    hyperparams = f[group+'/hyperparams'][:,:]
+                    thresh = f[group+'/thresh'].value
+                    basis_functions = f[group+"/basis_functions"][:,:]
+                    n_pcs = f[group+"/n_pcs"].value
                     f.close()
-                except KeyError:
+		elif dump.find(".npz"):
+                    f =  np.load ( dump ) 
+                    X = f[ 'X' ]
+                    y = f[ 'y' ]
+                    hyperparams = f[ 'hyperparams' ]
+                    thresh = f[ 'thresh' ]
+                    if dict(f).has_key ( "basis_functions" ):
+                        basis_functions = f[ 'basis_functions' ]
+                        n_pcs = f[ 'n_pcs' ]
+                        f.close()
+                    
+                else:    
+                    
+                    f = h5py.File ( dump, 'r+')
+                    group = "/%s_%03d_%03d_%03d" % ( model, sza, vza, raa )
+                    X = f[group + '/X_train'][:,:]
+                    y = f[group + '/y_train'][:,:]
+                    hyperparams = f[group+'/hyperparams'][:,:]
+                    thresh = f[group+'/thresh'].value
+                    basis_functions = f[group+"/basis_functions"][:,:]
+                    n_pcs = f[group+"/n_pcs"].value
                     f.close()
-                    print "Decomposing the input dataset into basis functions...",
-                    self.calculate_decomposition ( X, thresh )
-                    print "Done!\n ====> Using %d basis functions" % self.n_pcs
-                    out_fname = os.path.basename ( dump )
-                    np.savez_compressed( os.path.join ( "/tmp", out_fname ), \
-                        X=X, y=y, hyperparams=hyperparams, thresh=thresh, \
-                        basis_functions=self.basis_functions, n_pcs=self.n_pcs )
-                    shutil.move ( os.path.join ( "/tmp", out_fname ), dump )
-                    print "Updated emulator file with basis functions"
-                    basis_functions = self.basis_functions
-                    n_pcs = self.n_pcs
             else:
                 raise ValueError, "You specified both a dump file and X and y"
         else:
@@ -121,7 +134,7 @@ class MultivariateEmulator ( object ):
         self.train_emulators ( X, y, hyperparams=hyperparams, n_tries=n_tries )
 
 
-    def dump_emulator ( self, fname ):
+    def dump_emulator ( self, fname, model_name, sza, vza, raa ):
         """Save emulator to file for reuse
         
         Saves the emulator to a file (`.npz` format) for reuse.
@@ -132,9 +145,35 @@ class MultivariateEmulator ( object ):
             The output filename
             
         """
-        np.savez_compressed ( fname, X=self.X_train, y=self.y_train, \
-            hyperparams=self.hyperparams, thresh=self.thresh, \
-            basis_functions=self.basis_functions, n_pcs=self.n_pcs )
+        sza = int ( sza )
+        vza = int ( vza )
+        raa = int ( raa )
+        if fname.find ( ".npz" ) < 0 and  ( fname.find ( "h5" ) >= 0 \
+            or fname.find ( ".hdf" ) >= 0 ):
+            try:
+                f = h5py.File (fname, 'r+')
+            except IOError:
+                print "The file %s did not exist. Creating it" % fname
+                f = h5py.File (fname, 'w')
+                f
+            group = '%s_%03d_%03d_%03d' % ( model_name, sza, vza, raa )
+            if group in f.keys():
+                raise ValueError, "Emulator already exists!"
+            f.create_group ("/%s" % group )
+            f.create_dataset ( "/%s/X_train" % group, data=self.X_train, compression="gzip"  )
+            f.create_dataset ( "/%s/y_train" % group, data=self.y_train, compression="gzip"  )
+            f.create_dataset ( "/%s/hyperparams" % group, data=self.hyperparams,
+                            compression="gzip"  )
+            f.create_dataset ( "/%s/basis_functions" % group, data=self.basis_functions,
+                            compression="gzip"  )
+            f.create_dataset ( "/%s/thresh" % group, data=self.thresh  )
+            f.create_dataset ( "/%s/n_pcs" % group, data=self.n_pcs)
+            f.close()
+            print "Emulator safely saved"
+        else:
+            np.savez_compressed ( fname, X=self.X_train, y=self.y_train, \
+                hyperparams=self.hyperparams, thresh=self.thresh, \
+                basis_functions=self.basis_functions, n_pcs=self.n_pcs )
         
     
     def calculate_decomposition ( self, X, thresh ):
@@ -187,6 +226,25 @@ class MultivariateEmulator ( object ):
                 self.hyperparams[:,i] = hyperparams[:,i]
                 self.emulators[i]._set_params ( hyperparams[:, i] )
 
+    def hessian ( self, x ):
+        """A method to approximate the Hessian. This method builds on the fact
+        that the spectral emulators are a linear combination of individual
+        emulators. Therefore, we can calculate the Hessian of the spectral
+        emulator as the sum of the individual products of individual Hessians
+        times the spectral basis functions.
+        """
+        the_hessian = np.zeros (( len(x), len(x), 
+                                 len ( self.basis_functions[0] ) ) )
+        x = np.atleast_2d ( x )
+        for i in xrange ( self.n_pcs ):
+            #Calculate the Hessian of the weight
+            this_hessian = self.emulators[i].hessian ( x )
+            # Add this hessian contribution once it's been scaled by the
+            # relevant basis function.
+            the_hessian = the_hessian + \
+                this_hessian.squeeze()[:, :, None]*self.basis_functions[i]
+        return the_hessian
+            
         
     def compress ( self, X ):
         """Project full-rank vector into PC basis"""

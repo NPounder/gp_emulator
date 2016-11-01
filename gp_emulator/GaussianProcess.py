@@ -66,11 +66,12 @@ class GaussianProcess:
         self.Z = exp_theta[self.D]*np.exp ( -0.5*self.Z)
         self.Q = self.Z +\
             exp_theta[self.D+1]*np.eye ( self.n )
-        self.invQ = np.linalg.inv ( self.Q )
+        L = np.linalg.cholesky ( self.Q )
+        self.invQ = np.linalg.inv(L.T).dot( np.linalg.inv(L) )
+        #self.invQ = np.linalg.inv ( self.Q )
         self.invQt = np.dot ( self.invQ, self.targets )
 
-        self.logdetQ = 2.0 * np.sum ( np.log ( np.diag ( \
-                        np.linalg.cholesky ( self.Q ))))
+        self.logdetQ = 2.0 * np.sum ( np.log ( np.diag ( L )))
 
 
     def loglikelihood ( self, theta ):
